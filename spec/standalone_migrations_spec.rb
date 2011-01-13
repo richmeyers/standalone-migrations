@@ -24,13 +24,19 @@ describe 'Standalone migrations' do
     `cd spec/tmp && #{cmd} 2>&1 && echo SUCCESS`
   end
 
-  def make_migration(name)
-    migration = run("rake db:new_migration name=#{name}").match(%r{db/migrations/\d+.*.rb})[0]
+  def make_migration(name, options={})
+    task_name = options[:task_name] || 'db:new_migration'
+    migration = run("rake #{task_name} name=#{name}").match(%r{db/migrations/\d+.*.rb})[0]
     content = read(migration)
     content.sub!(/def self.down.*?\send/m, "def self.down;puts 'DOWN-#{name}';end")
     content.sub!(/def self.up.*?\send/m, "def self.up;puts 'UP-#{name}';end")
     write(migration, content)
     migration.match(/\d{14}/)[0]
+  end
+  
+  def make_sub_namespaced_migration(namespace, name)
+    # specify complete task name here to avoid conditionals in make_migration
+    make_migration(name, :task_name => "db:#{namespace}:new_migration")
   end
   
   def write_rakefile(config=nil)
@@ -108,6 +114,24 @@ TXT
         run("rake db:new_migration name=test_abc").should =~ %r{Created migration .*db/migrations/\d+_test_abc\.rb}
       end
     end
+    
+    context 'sub-namespaced task' do
+      before do
+        write_rakefile %{t.sub_namespace = "widgets"}
+      end
+      it "fails if i do not add a name" do
+        run("rake db:widgets:new_migration").should_not =~ /SUCCESS/
+      end
+
+      it "generates a new migration with this name and timestamp" do
+        run("rake db:widgets:new_migration name=test_widget").should =~ %r{Created migration .*spec/tmp/db/migrations/\d+_test_widget\.rb}
+        run("ls db/migrations").should =~ /^\d+_test_widget.rb$/
+      end
+      
+      it 'does not create top level db:new_migration task' do
+        run('rake db:new_migration').should =~ /Don't know how to build task 'db:new_migration'/
+      end
+    end
   end
 
   describe 'db:migrate' do
@@ -132,6 +156,22 @@ TXT
         result = run("rake db:migrate")
         result.should =~ /Migrating to CreateTests \(2010/
         result.should =~ /Migrating to CreateTests2 \(2010/
+      end
+    end
+    
+    context 'sub-namespaced task' do
+      before do
+        write_rakefile %{t.sub_namespace = "widgets"}
+      end
+      it 'runs the migrations' do
+        run("rake db:widgets:new_migration name=new_widget")
+        result = run("rake db:widgets:migrate")
+        result.should =~ /SUCCESS/
+        result.should =~ /Migrating to NewWidget \(#{Time.now.year}/
+      end
+      
+      it 'does not create top level db:new_migration task' do
+        run('rake db:migrate').should =~ /Don't know how to build task 'db:migrate'/
       end
     end
   end
@@ -176,6 +216,23 @@ TXT
         result.should =~ /wasn't found on path/
       end
     end
+    
+    context 'sub-namespaced task' do
+      before do
+        write_rakefile %{t.sub_namespace = "widgets"}
+      end
+      it 'migrates down' do
+        make_sub_namespaced_migration('widgets', 'widget_xxx')
+        sleep 1
+        version = make_sub_namespaced_migration('widgets', 'widget_yyy')
+        run 'rake db:widgets:migrate'
+
+        result = run("rake db:widgets:migrate:down VERSION=#{version}")
+        result.should =~ /SUCCESS/
+        result.should_not =~ /DOWN-widget_xxx/
+        result.should =~ /DOWN-widget_yyy/
+      end
+    end
   end
 
   describe 'db:migrate:up' do
@@ -213,6 +270,22 @@ TXT
         result = run 'rake db:migrate:up VERSION=20100509095820'
         result.should_not =~ /SUCCESS/
         result.should =~ /wasn't found on path/
+      end
+    end
+    
+    context 'sub-namespaced task' do
+      before do
+        write_rakefile %{t.sub_namespace = "widgets"}
+      end
+      it 'migrates up' do
+        make_sub_namespaced_migration('widgets', 'widget_xxx')
+        run 'rake db:widgets:migrate'
+        sleep 1
+        version = make_sub_namespaced_migration('widgets', 'widget_yyy')
+        result = run("rake db:widgets:migrate:up VERSION=#{version}")
+        result.should =~ /SUCCESS/
+        result.should_not =~ /UP-widget_xxx/
+        result.should =~ /UP-widget_yyy/
       end
     end
   end
