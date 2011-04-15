@@ -5,7 +5,8 @@ require 'logger'
 class MigratorTasks < ::Rake::TaskLib
   DefaultEnv = 'development'
 
-  attr_accessor :name, :base, :vendor, :config, :schema, :env, :current_env, :verbose, :log_level, :logger
+  attr_accessor :name, :base, :vendor, :config, :schema, :env, :current_env
+  attr_accessor :verbose, :log_level, :logger, :sub_namespace
   attr_reader :migrations
 
   def initialize(name = :migrator)
@@ -32,6 +33,19 @@ class MigratorTasks < ::Rake::TaskLib
 
   def define
     namespace :db do
+      if sub_namespace
+        namespace sub_namespace do
+          define_tasks
+        end
+      else
+        define_tasks
+      end
+    end
+  end
+
+    def define_tasks
+      sub_namespace_with_separator = sub_namespace ? "#{sub_namespace}:" : ''
+
       def ar_init(connect = true)
         require 'active_record'
         self.current_env = ENV[@env] || DefaultEnv
@@ -63,7 +77,7 @@ class MigratorTasks < ::Rake::TaskLib
         @migrations.each do |path|
           ActiveRecord::Migrator.migrate(path, ENV["VERSION"] ? ENV["VERSION"].to_i : nil)
         end
-        Rake::Task["db:schema:dump"].execute
+        Rake::Task["db:#{sub_namespace_with_separator}schema:dump"].execute
       end
 
       desc "Retrieves the current schema version number"
@@ -189,7 +203,7 @@ class MigratorTasks < ::Rake::TaskLib
               raise "Migration #{version} wasn't found on paths #{@migrations.join(', ')}" if migration_path.nil?
             end
             ActiveRecord::Migrator.run(direction, migration_path, version)
-            Rake::Task["db:schema:dump"].execute
+            Rake::Task["db:#{sub_namespace_with_separator}schema:dump"].execute
           end
         end
       end
@@ -229,14 +243,14 @@ class MigratorTasks < ::Rake::TaskLib
 
       namespace :test do
         desc "Recreate the test database from the current schema.rb"
-        task :load => ['db:ar_init', 'db:test:purge'] do
+        task :load => ["db:#{sub_namespace_with_separator}ar_init", "db:#{sub_namespace_with_separator}test:purge"] do
           ActiveRecord::Base.establish_connection(:test)
           ActiveRecord::Schema.verbose = false
-          Rake::Task["db:schema:load"].invoke
+          Rake::Task["db:#{sub_namespace_with_separator}schema:load"].invoke
         end
 
         desc "Empty the test database"
-        task :purge => 'db:ar_init' do
+        task :purge => "db:#{sub_namespace_with_separator}ar_init" do
           config = ActiveRecord::Base.configurations['test']
           case config["adapter"]
             when "mysql"
@@ -267,7 +281,7 @@ class MigratorTasks < ::Rake::TaskLib
         end
 
         desc 'Check for pending migrations and load the test schema'
-        task :prepare => ['db:abort_if_pending_migrations', 'db:test:load']
+        task :prepare => ["db:#{sub_namespace_with_separator}abort_if_pending_migrations", "db:#{sub_namespace_with_separator}test:load"]
       end
 
       desc 'generate a model=name field="field1:type field2:type"'
@@ -332,7 +346,6 @@ eof
         puts "Created migration #{file_name migration}"
       end
     end
-  end
 
   def class_name str
     str.split('_').map { |s| s.capitalize }.join
